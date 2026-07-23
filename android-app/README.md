@@ -9,7 +9,11 @@ touch-friendly serial console, and save everything it sends into your Downloads 
 - Talks to the reader over USB OTG using the CH340/CH341 chip found on the OSCR
   (CH9102, CP2102, FTDI and genuine Arduino Mega 2560 are also recognized).
 - Serial console with send box — drive the firmware's `SERIAL_MONITOR` menu
-  (enter menu numbers, starting letters, etc.).
+  (enter menu numbers, starting letters, etc.). Sends are passed through
+  byte-for-byte with no newline appended, matching the firmware's single-byte reads.
+- Menus the reader prints (`0)Game Boy`, `1)NES/Famicom`, …) are parsed live and shown
+  as tappable buttons, including page up/down and A–Z buttons for letter prompts.
+- Built-in **Guide** button with a step-by-step "how to dump a cartridge" walkthrough.
 - Selectable baud rate; defaults to 9600, which is what the firmware's
   `SERIAL_MONITOR` mode uses.
 - **Capture**: records every byte the reader sends into
@@ -24,8 +28,8 @@ touch-friendly serial console, and save everything it sends into your Downloads 
 2. Connect the reader to your Android device with a USB OTG adapter.
 3. Open the app (it also offers to open automatically when the reader is attached),
    tap **Connect**, and the reader's menu appears in the console.
-4. Type the number of a menu entry and tap **Send** to navigate, exactly like in the
-   Arduino IDE serial monitor.
+4. Tap the menu buttons that appear above the text box to navigate (or type the
+   number and tap **Send**).
 5. Tap **Capture** before starting an operation to record the reader's output to a
    file in `Downloads/CartReader/`.
 

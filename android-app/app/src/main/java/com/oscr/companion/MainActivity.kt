@@ -19,10 +19,13 @@ import android.view.inputmethod.EditorInfo
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
+import android.widget.HorizontalScrollView
+import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -64,13 +67,22 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
     private lateinit var connectButton: Button
     private lateinit var captureButton: Button
     private lateinit var clearButton: Button
+    private lateinit var guideButton: Button
     private lateinit var baudSpinner: Spinner
     private lateinit var terminalView: TextView
     private lateinit var terminalScroll: ScrollView
     private lateinit var inputField: EditText
     private lateinit var sendButton: Button
+    private lateinit var chipScroll: HorizontalScrollView
+    private lateinit var chipContainer: LinearLayout
 
     private val baudRates = listOf(9600, 19200, 38400, 57600, 115200, 230400, 500000)
+
+    // Firmware menus print one option per line as "N)Label" (N is 0-6), followed by
+    // a "type a number(0-6)" prompt; the selection is read back as a single byte.
+    private val menuOptionRegex = Regex("^\\s*([0-6])\\)\\s*(.*?)\\s*$")
+    private val lineBuffer = StringBuilder()
+    private val menuOptions = mutableListOf<Pair<String, String>>()
 
     private val usbReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -105,11 +117,14 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
         connectButton = findViewById(R.id.connectButton)
         captureButton = findViewById(R.id.captureButton)
         clearButton = findViewById(R.id.clearButton)
+        guideButton = findViewById(R.id.guideButton)
         baudSpinner = findViewById(R.id.baudSpinner)
         terminalView = findViewById(R.id.terminalView)
         terminalScroll = findViewById(R.id.terminalScroll)
         inputField = findViewById(R.id.inputField)
         sendButton = findViewById(R.id.sendButton)
+        chipScroll = findViewById(R.id.chipScroll)
+        chipContainer = findViewById(R.id.chipContainer)
 
         val adapter = ArrayAdapter(
             this,
@@ -124,6 +139,7 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
         sendButton.setOnClickListener { sendInput() }
         clearButton.setOnClickListener { terminalView.text = "" }
         captureButton.setOnClickListener { toggleCapture() }
+        guideButton.setOnClickListener { showGuide() }
         inputField.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_SEND) {
                 sendInput()
@@ -255,18 +271,28 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
 
     private fun sendInput() {
         val text = inputField.text.toString()
+        if (text.isEmpty()) return
+        if (sendText(text)) {
+            inputField.setText("")
+        }
+    }
+
+    // The firmware reads menu selections as single bytes, so nothing extra
+    // (no newline) must be appended to what the user sends.
+    private fun sendText(text: String): Boolean {
         val serialPort = port
         if (serialPort == null || !connected) {
             Toast.makeText(this, R.string.status_not_connected, Toast.LENGTH_SHORT).show()
-            return
+            return false
         }
-        try {
-            serialPort.write((text + "\n").toByteArray(Charsets.ISO_8859_1), WRITE_WAIT_MILLIS)
+        return try {
+            serialPort.write(text.toByteArray(Charsets.ISO_8859_1), WRITE_WAIT_MILLIS)
             appendTerminal("> $text\n")
-            inputField.setText("")
+            true
         } catch (e: Exception) {
             appendTerminal("\n[write failed: ${e.message}]\n")
             disconnect()
+            false
         }
     }
 
@@ -287,9 +313,94 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
             }
         }
         runOnUiThread {
-            appendTerminal(String(data, Charsets.ISO_8859_1))
+            val text = String(data, Charsets.ISO_8859_1)
+            appendTerminal(text)
+            processIncoming(text)
             updateCaptureUi()
         }
+    }
+
+    private fun processIncoming(text: String) {
+        for (ch in text) {
+            if (ch == '\n') {
+                handleLine(lineBuffer.toString().trimEnd('\r'))
+                lineBuffer.setLength(0)
+            } else {
+                lineBuffer.append(ch)
+                // Guard against endless lines of binary data
+                if (lineBuffer.length > 500) lineBuffer.setLength(0)
+            }
+        }
+    }
+
+    private fun handleLine(line: String) {
+        val match = menuOptionRegex.matchEntire(line)
+        if (match != null) {
+            val key = match.groupValues[1]
+            val label = match.groupValues[2]
+            if (label.isEmpty()) return
+            // Menus always start printing at option 0
+            if (key == "0") menuOptions.clear()
+            menuOptions.removeAll { it.first == key }
+            menuOptions.add(Pair(key, label))
+            showMenuChips()
+            return
+        }
+        if (line.startsWith("Enter first letter", ignoreCase = true)) {
+            showLetterChips()
+        }
+    }
+
+    private fun showMenuChips() {
+        chipContainer.removeAllViews()
+        for ((key, label) in menuOptions) {
+            addChip("$key  $label") { sendText(key) }
+        }
+        if (menuOptions.isNotEmpty()) {
+            addChip(getString(R.string.chip_page_up)) { sendText("u") }
+            addChip(getString(R.string.chip_page_down)) { sendText("d") }
+        }
+        chipScroll.visibility = if (chipContainer.childCount > 0) View.VISIBLE else View.GONE
+        chipScroll.scrollTo(0, 0)
+    }
+
+    private fun showLetterChips() {
+        chipContainer.removeAllViews()
+        for (c in "#ABCDEFGHIJKLMNOPQRSTUVWXYZ") {
+            addChip(c.toString()) { sendText(c.toString()) }
+        }
+        chipScroll.visibility = View.VISIBLE
+        chipScroll.scrollTo(0, 0)
+    }
+
+    private fun addChip(label: String, onClick: () -> Unit) {
+        val button = Button(this)
+        button.text = label
+        button.isAllCaps = false
+        button.textSize = 13f
+        button.minWidth = 0
+        button.minimumWidth = 0
+        button.minHeight = 0
+        button.minimumHeight = 0
+        val params = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        )
+        params.marginEnd = (6 * resources.displayMetrics.density).toInt()
+        button.layoutParams = params
+        val padH = (14 * resources.displayMetrics.density).toInt()
+        val padV = (4 * resources.displayMetrics.density).toInt()
+        button.setPadding(padH, padV, padH, padV)
+        button.setOnClickListener { onClick() }
+        chipContainer.addView(button)
+    }
+
+    private fun showGuide() {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.guide_title)
+            .setMessage(R.string.guide_text)
+            .setPositiveButton(android.R.string.ok, null)
+            .show()
     }
 
     override fun onRunError(e: Exception) {

@@ -7,7 +7,12 @@
     <string name="clear">Clear</string>
     <string name="start_capture">Capture</string>
     <string name="stop_capture">Stop capture</string>
-    <string name="input_hint">Type a command, e.g. a menu number</string>
+    <string name="input_hint">Menu number/letter (sent as-is, no newline)</string>
+    <string name="guide">Guide</string>
+    <string name="chip_page_up">▲ page (u)</string>
+    <string name="chip_page_down">▼ page (d)</string>
+    <string name="guide_title">How to dump a cartridge</string>
+    <string name="guide_text">1. One-time setup: build the reader firmware with SERIAL_MONITOR enabled in Cart_Reader/Config.h (comment out the HW# line, uncomment //#define SERIAL_MONITOR) and flash it. This moves the reader\'s menu from the OLED/LCD to the USB serial port.\n\n2. Insert a cartridge into the reader, plug the reader into this device with a USB OTG cable and tap Connect. The reader resets and prints its main menu.\n\n3. Menu options appear as buttons above the text box — tap one to select it (or type its number and tap Send). Use the ▲/▼ page buttons for long menus.\n\n4. Pick your console, then choose Read ROM (or Read Save). The dump is written to the SD card in the reader; progress and checksums are shown here.\n\n5. Optional: tap Capture before starting to also record everything the reader prints into Downloads/CartReader on this device.\n\n6. When the dump finishes, the ROM file is on the reader\'s SD card in a folder named after the game. Pop the SD card into this device with a card reader (or into a PC) to copy the file.\n\nTip: the reader expects single characters — the app sends exactly what you tap or type, with no newline added.</string>
     <string name="status_disconnected">Disconnected — plug in the cart reader and tap Connect</string>
     <string name="status_no_device">No USB serial device found. Check the OTG cable.</string>
     <string name="status_requesting_permission">Requesting USB permission…</string>
