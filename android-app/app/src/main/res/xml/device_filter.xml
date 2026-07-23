@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- CH340/CH340G (stock OSCR USB-serial chip), 0x1A86:0x7523 -->
+    <usb-device vendor-id="6790" product-id="29987" />
+    <!-- CH341, 0x1A86:0x5523 -->
+    <usb-device vendor-id="6790" product-id="21795" />
+    <!-- CH9102, 0x1A86:0x55D4 -->
+    <usb-device vendor-id="6790" product-id="21972" />
+    <!-- Arduino Mega 2560, 0x2341:0x0010 -->
+    <usb-device vendor-id="9025" product-id="16" />
+    <!-- Arduino Mega 2560 R3, 0x2341:0x0042 -->
+    <usb-device vendor-id="9025" product-id="66" />
+    <!-- FTDI FT232R, 0x0403:0x6001 -->
+    <usb-device vendor-id="1027" product-id="24577" />
+    <!-- Silicon Labs CP2102, 0x10C4:0xEA60 -->
+    <usb-device vendor-id="4292" product-id="60000" />
+</resources>

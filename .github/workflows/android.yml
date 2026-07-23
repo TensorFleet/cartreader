@@ -1,0 +1,75 @@
+name: Android App
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'android-app/**'
+      - '.github/workflows/android.yml'
+  pull_request:
+    paths:
+      - 'android-app/**'
+      - '.github/workflows/android.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Decode signing keystore
+        working-directory: android-app
+        run: base64 -d ci-keystore.jks.base64 > ci-keystore.jks
+
+      - name: Build release APK
+        working-directory: android-app
+        run: |
+          gradle --no-daemon assembleRelease \
+            -PverCode=${{ github.run_number }} \
+            -PverName=1.0.${{ github.run_number }}
+
+      - name: Collect APK
+        run: |
+          cp android-app/app/build/outputs/apk/release/app-release.apk \
+            OSCR-Companion-1.0.${{ github.run_number }}.apk
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OSCR-Companion-apk
+          path: OSCR-Companion-*.apk
+
+      - name: Publish release
+        if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/master')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: android-v1.0.${{ github.run_number }}
+          name: OSCR Companion Android App v1.0.${{ github.run_number }}
+          body: |
+            Android companion app for the Open Source Cartridge Reader.
+
+            Connect the reader to your Android device with a USB OTG cable, then use the
+            app to drive the firmware's serial monitor mode and capture the data it sends
+            into your Downloads folder.
+
+            **Install:** download `OSCR-Companion-*.apk` below and open it on your device
+            (you may need to allow installs from unknown sources). The APK is signed with
+            a public CI key, so it is installable but carries no authenticity guarantee.
+          files: OSCR-Companion-*.apk
