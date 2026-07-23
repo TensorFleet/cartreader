@@ -2,7 +2,7 @@ name: Android App
 
 on:
   push:
-    branches: [master]
+    branches: [master, 'claude/android-reader-app-ci-dmu9dr']
     paths:
       - 'android-app/**'
       - '.github/workflows/android.yml'
@@ -57,11 +57,12 @@ jobs:
           path: OSCR-Companion-*.apk
 
       - name: Publish release
-        if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/master')
+        if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: android-v1.0.${{ github.run_number }}
           name: OSCR Companion Android App v1.0.${{ github.run_number }}
+          prerelease: ${{ github.ref != 'refs/heads/master' }}
           body: |
             Android companion app for the Open Source Cartridge Reader.
 
