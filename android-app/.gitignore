@@ -1,0 +1,7 @@
+.gradle/
+build/
+local.properties
+/ci-keystore.jks
+.idea/
+*.iml
+.DS_Store

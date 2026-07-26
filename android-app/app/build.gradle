@@ -1,0 +1,67 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+
+def verCode = (findProperty('verCode') ?: '1') as Integer
+def verName = (findProperty('verName') ?: '1.0.0-dev') as String
+
+android {
+    namespace 'com.oscr.companion'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.oscr.companion'
+        minSdk 26
+        targetSdk 35
+        versionCode verCode
+        versionName verName
+    }
+
+    signingConfigs {
+        ci {
+            // Public CI keystore, stored base64-encoded in the repository
+            // (ci-keystore.jks.base64, password "cartreader"). It only makes the
+            // APK installable; it provides no authenticity guarantees.
+            // Decode it first: base64 -d ci-keystore.jks.base64 > ci-keystore.jks
+            storeFile rootProject.file('ci-keystore.jks')
+            storePassword 'cartreader'
+            keyAlias 'cartreader'
+            keyPassword 'cartreader'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            if (rootProject.file('ci-keystore.jks').exists()) {
+                signingConfig signingConfigs.ci
+            }
+        }
+        debug {
+            applicationIdSuffix '.debug'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+
+    lint {
+        checkReleaseBuilds false
+        abortOnError false
+    }
+}
+
+dependencies {
+    implementation 'androidx.core:core-ktx:1.13.1'
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'com.google.android.material:material:1.12.0'
+    implementation 'com.github.mik3y:usb-serial-for-android:3.7.0'
+    testImplementation 'junit:junit:4.13.2'
+}

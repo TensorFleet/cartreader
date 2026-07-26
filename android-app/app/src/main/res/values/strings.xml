@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">OSCR Companion</string>
+    <string name="connect">Connect</string>
+    <string name="disconnect">Disconnect</string>
+    <string name="send">Send</string>
+    <string name="clear">Clear</string>
+    <string name="start_capture">Capture</string>
+    <string name="stop_capture">Stop capture</string>
+    <string name="input_hint">Menu number/letter (sent as-is, no newline)</string>
+    <string name="guide">Guide</string>
+    <string name="settings">Emulators</string>
+    <string name="download">Download</string>
+    <string name="download_and_play">Download &amp; Play</string>
+    <string name="open_existing_rom">Open existing ROM…</string>
+    <string name="rom_dump_finished">ROM dump finished — choose Download or Download &amp; Play.</string>
+    <string name="rom_reading">Reading ROM to the OSCR SD card…</string>
+    <string name="rom_requesting">Requesting ROM from the reader…</string>
+    <string name="rom_downloading_fmt">Downloading %1$s (%2$s)</string>
+    <string name="rom_downloading_percent_fmt">Downloading ROM — %1$d%%</string>
+    <string name="rom_downloaded_verified_fmt">Downloaded and verified %1$s — CRC32 %2$08X</string>
+    <string name="rom_transfer_failed">ROM transfer failed</string>
+    <string name="chip_page_up">▲ page (u)</string>
+    <string name="chip_page_down">▼ page (d)</string>
+    <string name="guide_title">How to dump a cartridge</string>
+    <string name="guide_text">1. Flash the matching OSCR serial-transfer firmware. It runs at 500,000 baud.\n\n2. Insert a cartridge, connect the reader with a USB OTG cable, and tap Connect.\n\n3. Pick the console and choose Read ROM. The OSCR writes and checksums its authoritative SD copy first.\n\n4. At the Press Button prompt, choose Download to save only, or Download &amp; Play to CRC-verify the USB copy and launch the emulator configured for that console.\n\n5. Verified ROMs are saved under Downloads/CartReader/ROMs. Open existing ROM… can launch a file that is already on this device.\n\n6. Use Emulators to select RetroArch, the Android chooser, or a specific installed app for each cartridge type.\n\nTip: ordinary menu commands are still sent as exact single bytes without a newline.</string>
+    <string name="status_disconnected">Disconnected — plug in the cart reader and tap Connect</string>
+    <string name="status_no_device">No USB serial device found. Check the OTG cable.</string>
+    <string name="status_requesting_permission">Requesting USB permission…</string>
+    <string name="status_permission_denied">USB permission denied</string>
+    <string name="status_open_failed">Could not open USB device</string>
+    <string name="status_not_connected">Not connected</string>
+    <string name="status_connected_fmt">Connected: %1$s @ %2$d baud</string>
+    <string name="capture_failed_fmt">Capture failed: %1$s</string>
+    <string name="capture_saved_fmt">Saved Downloads/CartReader/%1$s (%2$d bytes)</string>
+    <string name="capture_status_fmt">Recording to %1$s — %2$d bytes</string>
+</resources>

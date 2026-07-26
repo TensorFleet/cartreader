@@ -1,0 +1,28 @@
+name: macOS companion
+
+on:
+  push:
+    paths:
+      - "macos-app/**"
+      - ".github/workflows/macos.yml"
+  pull_request:
+    paths:
+      - "macos-app/**"
+      - ".github/workflows/macos.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test
+        run: swift test --package-path macos-app
+      - name: Package app
+        run: |
+          chmod +x macos-app/scripts/package_app.sh
+          make -C macos-app app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OSCR-Companion-macOS
+          path: macos-app/dist/OSCR Companion.app

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Simple game cartridge glyph -->
+    <path
+        android:fillColor="#9CE29C"
+        android:pathData="M36,30 L72,30 L72,36 L76,36 L76,74 L32,74 L32,36 L36,36 Z" />
+    <path
+        android:fillColor="#20242C"
+        android:pathData="M40,40 L68,40 L68,54 L40,54 Z" />
+    <path
+        android:fillColor="#20242C"
+        android:pathData="M44,60 L64,60 L64,68 L44,68 Z" />
+</vector>
