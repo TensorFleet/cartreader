@@ -10,12 +10,12 @@ struct SerialPortDescriptor: Identifiable, Hashable {
 
 @MainActor
 final class ReaderModel: ObservableObject {
-    static let baudRates = [9_600, 19_200, 38_400, 57_600, 115_200, 230_400, 500_000]
+    static let baudRates = [9_600, 19_200, 38_400, 57_600, 115_200, 230_400, 250_000, 500_000]
     private static let maximumTerminalCharacters = 100_000
 
     @Published var ports: [SerialPortDescriptor] = []
     @Published var selectedPortPath = ""
-    @Published var baudRate = 500_000
+    @Published var baudRate = 115_200
     @Published var isConnected = false
     @Published var status = "Disconnected — plug in the cart reader and connect"
     @Published var terminalText = ""
@@ -246,7 +246,12 @@ final class ReaderModel: ObservableObject {
             }
         }
 
-        let text = String(data: data, encoding: .isoLatin1) ?? ""
+        // Firmware pads the legacy checksum footer with NUL bytes so Android
+        // USB hosts release their final bulk read. Preserve those bytes in a
+        // raw capture, but keep them out of the terminal and menu parser.
+        let terminalBytes = data.filter { $0 != 0 }
+        guard !terminalBytes.isEmpty else { return }
+        let text = String(bytes: terminalBytes, encoding: .isoLatin1) ?? ""
         appendTerminal(text)
         parser.consume(text)
         quickActions = parser.actions

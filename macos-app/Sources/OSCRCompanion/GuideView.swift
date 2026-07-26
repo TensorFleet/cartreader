@@ -18,8 +18,8 @@ struct GuideView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    guideStep(1, "Flash serial firmware", "Build the OSCR serial-transfer firmware with SERIAL_MONITOR enabled. It runs the menu and CRC-verified ROM downloads over USB at 500,000 baud.")
-                    guideStep(2, "Connect", "Remove cartridges while flashing. For normal use, insert a cartridge, power on the OSCR, choose its USB serial port here, leave 9,600 baud selected, and click Connect.")
+                    guideStep(1, "Flash serial firmware", "Build the OSCR serial-transfer firmware with SERIAL_MONITOR enabled. It runs the menu and CRC-verified ROM downloads over USB at 115,200 baud.")
+                    guideStep(2, "Connect", "Remove cartridges while flashing. For normal use, insert a cartridge, power on the OSCR, choose its USB serial port here, leave 115,200 baud selected, and click Connect.")
                     guideStep(3, "Navigate", "The options printed by the OSCR appear as buttons. Click an option, use the page buttons, or type one character and press Send.")
                     guideStep(4, "Read", "Choose the console, then Read ROM or Read Save. Progress, detected metadata, and checksums appear in the terminal.")
                     guideStep(5, "Capture if useful", "Capture stores the raw serial output in ~/Downloads/CartReader. It does not transfer the ROM itself.")

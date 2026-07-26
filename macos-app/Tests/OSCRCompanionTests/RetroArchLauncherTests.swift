@@ -50,6 +50,46 @@ final class RetroArchLauncherTests: XCTestCase {
 }
 
 final class SerialROMTransferTests: XCTestCase {
+    func testHeaderChecksumCompletesWithoutFooter() throws {
+        let destination = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: destination) }
+
+        let receiver = SerialROMTransferReceiver(destinationDirectory: destination)
+        let packet = Data(
+            "OSCRXFER1\r\nNAME:test.sfc\r\nSIZE:9\r\nCRC32:CBF43926\r\nDATA\r\n123456789".utf8
+        )
+        let result = receiver.consume(packet)
+
+        guard case .completed(let url, let crc)? = result.events.first(where: {
+            if case .completed = $0 { return true }
+            return false
+        }) else {
+            return XCTFail("Expected a completed header-checksummed transfer")
+        }
+        XCTAssertEqual(crc, 0xCBF43926)
+        XCTAssertEqual(try Data(contentsOf: url), Data("123456789".utf8))
+    }
+
+    func testHeaderChecksumRejectsCorruptPayload() {
+        let destination = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: destination) }
+
+        let receiver = SerialROMTransferReceiver(destinationDirectory: destination)
+        let packet = Data(
+            "OSCRXFER1\r\nNAME:test.sfc\r\nSIZE:9\r\nCRC32:00000000\r\nDATA\r\n123456789".utf8
+        )
+        let result = receiver.consume(packet)
+
+        XCTAssertTrue(result.events.contains { event in
+            if case .failed(let message) = event { return message.contains("checksum mismatch") }
+            return false
+        })
+        let files = (try? FileManager.default.contentsOfDirectory(atPath: destination.path)) ?? []
+        XCTAssertTrue(files.isEmpty)
+    }
+
     func testReceivesChunkedROMAndVerifiesCRC32() throws {
         let destination = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

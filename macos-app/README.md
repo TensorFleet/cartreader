@@ -12,7 +12,8 @@ capture logging, and built-in dumping guide.
 
 The serial-transfer build is based on V15.6. In `Cart_Reader/Config.h`, comment out
 the `HW#` define and enable `#define SERIAL_MONITOR` before compiling and flashing.
-This custom build uses 500,000 baud.
+This custom build uses 115,200 baud for reliable sustained transfers across macOS
+and Android USB hosts.
 
 ## Run during development
 
@@ -29,6 +30,16 @@ swift test
 make app
 open "dist/OSCR Companion.app"
 ```
+
+With an SNES cartridge inserted, the opt-in test below selects SNES Read ROM and
+drives a real reader through a complete dump and CRC-verified serial transfer:
+
+```sh
+OSCR_LIVE_PORT=/dev/cu.usbserial-10 swift test --filter LiveSerialTransferTests
+```
+
+Set `OSCR_LIVE_EXPECTED_CRC` to a known eight-digit hexadecimal CRC for an
+additional cartridge-specific assertion.
 
 `make app` creates an ad-hoc-signed app bundle at
 `dist/OSCR Companion.app`. A release distributed to other Macs should be signed
@@ -48,8 +59,9 @@ completed ROM over serial.
 When a ROM read completes, **Download** saves and verifies the completed SD copy
 without launching anything. **Download & Play** requests the same copy over
 USB using the `OSCRXFER1` size-framed protocol. The Mac writes a temporary `.part`
-file, verifies the firmware's final CRC32, moves the verified ROM into
-`~/Downloads/CartReader/ROMs`, and starts the emulator configured for that system.
+file, verifies the firmware CRC32 from the transfer header (or the legacy footer),
+moves the verified ROM into `~/Downloads/CartReader/ROMs`, and starts the emulator
+configured for that system.
 Settings provides per-system choices for RetroArch with an explicit compatible core,
 the macOS default application, or a chosen `.app`. **Open from SD…** applies the same
 configuration to a ROM on removable storage.
