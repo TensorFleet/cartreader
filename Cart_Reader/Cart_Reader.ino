@@ -317,6 +317,15 @@ int foldern;
 // 4 chars for console type, 4 chars for SAVE/ROM, 21 chars for ROM name, 4 chars for folder number, 3 chars for slashes, one char for termination, one char savety
 char folder[38];
 
+#if defined(SERIAL_MONITOR)
+// The serial-transfer extension always sends the completed SD copy. Keeping a
+// separate path prevents later save-file or database operations from replacing
+// the ROM path held in the shared folder/fileName variables.
+char lastRomFolder[sizeof(folder)];
+char lastRomFileName[FILENAME_LENGTH];
+boolean lastRomAvailable = false;
+#endif
+
 // Array that holds the data
 byte sdBuffer[512];
 
@@ -627,7 +636,14 @@ boolean compareCRC(const char* database, uint32_t crc32sum, boolean renamerom, i
           sd.chdir(folder);
           delay(100);
           if (myFile.open(fileName, O_READ)) {
-            myFile.rename(gamename);
+            if (myFile.rename(gamename)) {
+#if defined(SERIAL_MONITOR)
+              if (lastRomAvailable && strcmp(lastRomFolder, folder) == 0 && strcmp(lastRomFileName, fileName) == 0) {
+                strlcpy(lastRomFileName, gamename, sizeof(lastRomFileName));
+              }
+#endif
+              strlcpy(fileName, gamename, sizeof(fileName));
+            }
             // Close the file:
             myFile.close();
           }
@@ -678,6 +694,14 @@ void createFolder(const char* system, const char* subfolder, const char* gameNam
   }
   sd.mkdir(folder, true);
   sd.chdir(folder);
+
+#if defined(SERIAL_MONITOR)
+  if (subfolder != NULL && strcmp(subfolder, "ROM") == 0) {
+    strlcpy(lastRomFolder, folder, sizeof(lastRomFolder));
+    strlcpy(lastRomFileName, fileName, sizeof(lastRomFileName));
+    lastRomAvailable = true;
+  }
+#endif
 }
 
 void printAndIncrementFolder(bool displayClear = false) {
@@ -2241,7 +2265,7 @@ void setup() {
 
 #ifdef ENABLE_SERIAL
   // Serial Begin
-  Serial.begin(9600);
+  Serial.begin(500000);
   // LED Error
   rgbLed(blue_color);
 #endif /* ENABLE_SERIAL */
@@ -3126,6 +3150,47 @@ void checkUpdater() {
 *****************************************/
 // Using Serial Monitor
 #if defined(ENABLE_SERIAL)
+#if defined(SERIAL_MONITOR)
+void transferLastRomSerial() {
+  if (!lastRomAvailable) {
+    Serial.println(F("OSCRXFER1 ERR NO_ROM"));
+    return;
+  }
+
+  FsFile transferFile;
+  sd.chdir();
+  if (!sd.chdir(lastRomFolder) || !transferFile.open(lastRomFileName, O_READ)) {
+    Serial.println(F("OSCRXFER1 ERR FILE_NOT_FOUND"));
+    return;
+  }
+
+  const uint32_t transferSize = (uint32_t)transferFile.fileSize();
+  Serial.println(F("OSCRXFER1"));
+  Serial.print(F("NAME:"));
+  Serial.println(lastRomFileName);
+  Serial.print(F("SIZE:"));
+  Serial.println(transferSize);
+  Serial.println(F("DATA"));
+  Serial.flush();
+
+  uint32_t transferCRC = 0xFFFFFFFF;
+  int32_t byteCount;
+  while ((byteCount = transferFile.read(sdBuffer, sizeof(sdBuffer))) > 0) {
+    transferCRC = updateCRC(sdBuffer, byteCount, transferCRC);
+    Serial.write(sdBuffer, byteCount);
+  }
+  transferFile.close();
+  transferCRC = ~transferCRC;
+
+  char transferCRCString[9];
+  sprintf(transferCRCString, "%08lX", transferCRC);
+  Serial.println();
+  Serial.print(F("OSCRXFER1 END "));
+  Serial.println(transferCRCString);
+  Serial.flush();
+}
+#endif
+
 uint8_t checkButton() {
   while (Serial.available() == 0) {
   }
@@ -3161,8 +3226,12 @@ void wait_serial() {
   }
   while (Serial.available() == 0) {
   }
-  // Result is ignored
-  Serial.read();
+  char incomingByte = Serial.read();
+#if defined(SERIAL_MONITOR)
+  if (incomingByte == 'T') {
+    transferLastRomSerial();
+  }
+#endif
   Serial.println(FS(FSTRING_EMPTY));
 }
 #endif
