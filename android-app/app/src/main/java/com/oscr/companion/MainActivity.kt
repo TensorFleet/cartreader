@@ -48,6 +48,7 @@ import java.io.OutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
 
@@ -59,10 +60,10 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
         private const val MAX_TERMINAL_CHARS = 100000
         private const val SERIAL_READ_BUFFER_BYTES = 1024
         private const val SERIAL_FOOTER_READ_BUFFER_BYTES = 32
-        // A full 1 KiB read takes about 89 ms at 115.2 kbaud. Keep this safely
-        // above that interval so continuous payload reads complete, while short
-        // menu/header packets still return promptly from USB bulkTransfer.
-        private const val SERIAL_READ_TIMEOUT_MILLIS = 500
+        // A zero timeout uses Android's queued UsbRequest path. Timed
+        // bulkTransfer reads lose bytes on some AYN/CH340 host combinations;
+        // the firmware's trailing padding ensures the final 1 KiB request fills.
+        private const val SERIAL_READ_TIMEOUT_MILLIS = 0
         private const val TRANSFER_START_TIMEOUT_MILLIS = 120_000L
         private const val TRANSFER_STALL_TIMEOUT_MILLIS = 10_000L
         private const val LOG_TAG = "OSCRTransfer"
@@ -73,6 +74,9 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
     private var port: UsbSerialPort? = null
     private var ioManager: SerialInputOutputManager? = null
     private var connected = false
+    private val serialDataExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "OSCRSerialData")
+    }
 
     private val captureLock = Any()
     private var captureStream: OutputStream? = null
@@ -237,6 +241,7 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
         transferReceiver = null
         stopCapture(silent = true)
         disconnect()
+        serialDataExecutor.shutdownNow()
         unregisterReceiver(usbReceiver)
         super.onDestroy()
     }
@@ -302,9 +307,9 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
         port = serialPort
         val manager = SerialInputOutputManager(serialPort, this)
         manager.readBufferSize = SERIAL_READ_BUFFER_BYTES
-        // A non-zero timeout selects Android's synchronous bulk-transfer path.
-        // The zero-timeout UsbRequest path can withhold partial buffers and lose
-        // data with CH340 adapters during sustained high-speed ROM transfers.
+        // The queued UsbRequest path avoids byte loss observed with synchronous
+        // bulkTransfer on the AYN Thor's CH340 host controller. The 1 KiB buffer
+        // keeps callback load bounded, and firmware padding releases its tail.
         manager.readTimeout = SERIAL_READ_TIMEOUT_MILLIS
         ioManager = manager
         manager.start()
@@ -373,8 +378,15 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
         }
     }
 
-    // SerialInputOutputManager.Listener — called on the I/O thread
+    // Return immediately so SerialInputOutputManager can queue the next USB
+    // read before storage writes, CRC work, or UI delivery can stall it.
     override fun onNewData(data: ByteArray) {
+        serialDataExecutor.execute { processSerialData(data) }
+    }
+
+    private fun processSerialData(data: ByteArray) {
+        captureSerialData(data)
+
         val receiver = transferReceiver
         if (receiver != null) {
             val result = receiver.consume(data)
@@ -408,25 +420,26 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
             return
         }
 
-        synchronized(captureLock) {
-            val stream = captureStream
-            if (stream != null) {
-                try {
-                    stream.write(data)
-                    captureBytes += data.size
-                } catch (e: IOException) {
-                    runOnUiThread {
-                        appendTerminal("\n[capture write failed: ${e.message}]\n")
-                        stopCapture(silent = true)
-                    }
-                }
-            }
-        }
         runOnUiThread {
             val text = serialTerminalText(data)
             appendTerminal(text)
             processIncoming(text)
             updateCaptureUi()
+        }
+    }
+
+    private fun captureSerialData(data: ByteArray) {
+        synchronized(captureLock) {
+            val stream = captureStream ?: return
+            try {
+                stream.write(data)
+                captureBytes += data.size
+            } catch (e: IOException) {
+                runOnUiThread {
+                    appendTerminal("\n[capture write failed: ${e.message}]\n")
+                    stopCapture(silent = true)
+                }
+            }
         }
     }
 
