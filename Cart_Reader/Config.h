@@ -34,7 +34,7 @@
 //#define HW3
 //#define HW2
 //#define HW1
-//#define SERIAL_MONITOR
+#define SERIAL_MONITOR
 
 /****/
 

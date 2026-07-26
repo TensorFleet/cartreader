@@ -32,6 +32,7 @@ fp-info-cache
 # MacOS
 .DS_Store
 ._*
+/device-build/
 
 # ODS files
 .~lock*

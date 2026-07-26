@@ -10,10 +10,12 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.provider.MediaStore
+import android.provider.OpenableColumns
 import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.widget.ArrayAdapter
@@ -21,14 +23,17 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import com.hoho.android.usbserial.driver.UsbSerialPort
 import com.hoho.android.usbserial.driver.UsbSerialProber
 import com.hoho.android.usbserial.util.SerialInputOutputManager
@@ -47,6 +52,7 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
     companion object {
         private const val ACTION_USB_PERMISSION = "com.oscr.companion.USB_PERMISSION"
         private const val REQUEST_STORAGE_PERMISSION = 1
+        private const val REQUEST_ROM_STORAGE_PERMISSION = 2
         private const val WRITE_WAIT_MILLIS = 2000
         private const val MAX_TERMINAL_CHARS = 100000
     }
@@ -68,6 +74,7 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
     private lateinit var captureButton: Button
     private lateinit var clearButton: Button
     private lateinit var guideButton: Button
+    private lateinit var settingsButton: Button
     private lateinit var baudSpinner: Spinner
     private lateinit var terminalView: TextView
     private lateinit var terminalScroll: ScrollView
@@ -75,6 +82,12 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
     private lateinit var sendButton: Button
     private lateinit var chipScroll: HorizontalScrollView
     private lateinit var chipContainer: LinearLayout
+    private lateinit var romActionContainer: LinearLayout
+    private lateinit var romStatusText: TextView
+    private lateinit var romProgress: ProgressBar
+    private lateinit var downloadButton: Button
+    private lateinit var downloadPlayButton: Button
+    private lateinit var openRomButton: Button
 
     private val baudRates = listOf(9600, 19200, 38400, 57600, 115200, 230400, 500000)
 
@@ -83,6 +96,25 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
     private val menuOptionRegex = Regex("^\\s*([0-6])\\)\\s*(.*?)\\s*$")
     private val lineBuffer = StringBuilder()
     private val menuOptions = mutableListOf<Pair<String, String>>()
+    private var selectedRomSystem: RomSystem? = null
+    private var romReadPending = false
+    private var romReadReady = false
+    private val romReadBuffer = StringBuilder()
+
+    @Volatile private var transferReceiver: SerialRomTransferReceiver? = null
+    private var launchAfterTransfer = false
+    private var pendingPermissionLaunch = false
+
+    private val openRomLauncher = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            try {
+                contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (_: SecurityException) {
+                // Some document providers grant access only for the current task.
+            }
+            launchRom(uri, displayNameFor(uri), selectedRomSystem)
+        }
+    }
 
     private val usbReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -118,6 +150,7 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
         captureButton = findViewById(R.id.captureButton)
         clearButton = findViewById(R.id.clearButton)
         guideButton = findViewById(R.id.guideButton)
+        settingsButton = findViewById(R.id.settingsButton)
         baudSpinner = findViewById(R.id.baudSpinner)
         terminalView = findViewById(R.id.terminalView)
         terminalScroll = findViewById(R.id.terminalScroll)
@@ -125,6 +158,12 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
         sendButton = findViewById(R.id.sendButton)
         chipScroll = findViewById(R.id.chipScroll)
         chipContainer = findViewById(R.id.chipContainer)
+        romActionContainer = findViewById(R.id.romActionContainer)
+        romStatusText = findViewById(R.id.romStatusText)
+        romProgress = findViewById(R.id.romProgress)
+        downloadButton = findViewById(R.id.downloadButton)
+        downloadPlayButton = findViewById(R.id.downloadPlayButton)
+        openRomButton = findViewById(R.id.openRomButton)
 
         val adapter = ArrayAdapter(
             this,
@@ -133,13 +172,17 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
         )
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         baudSpinner.adapter = adapter
-        baudSpinner.setSelection(0) // 9600, the firmware's SERIAL_MONITOR speed
+        baudSpinner.setSelection(baudRates.lastIndex) // serial-transfer firmware: 500,000
 
         connectButton.setOnClickListener { if (connected) disconnect() else connect() }
         sendButton.setOnClickListener { sendInput() }
         clearButton.setOnClickListener { terminalView.text = "" }
         captureButton.setOnClickListener { toggleCapture() }
         guideButton.setOnClickListener { showGuide() }
+        settingsButton.setOnClickListener { showEmulatorSettings() }
+        downloadButton.setOnClickListener { startRomDownload(playWhenFinished = false) }
+        downloadPlayButton.setOnClickListener { startRomDownload(playWhenFinished = true) }
+        openRomButton.setOnClickListener { openExistingRom() }
         inputField.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_SEND) {
                 sendInput()
@@ -159,6 +202,7 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
 
         setStatus(getString(R.string.status_disconnected))
         updateCaptureUi()
+        updateRomActions()
 
         if (intent?.action == UsbManager.ACTION_USB_DEVICE_ATTACHED) {
             connect()
@@ -173,6 +217,8 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
     }
 
     override fun onDestroy() {
+        transferReceiver?.cancel()
+        transferReceiver = null
         stopCapture(silent = true)
         disconnect()
         unregisterReceiver(usbReceiver)
@@ -253,9 +299,12 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
             )
         )
         appendTerminal("[connected at ${selectedBaud()} baud]\n")
+        updateRomActions()
     }
 
     private fun disconnect() {
+        transferReceiver?.cancel()
+        transferReceiver = null
         connected = false
         ioManager?.stop()
         ioManager = null
@@ -267,6 +316,7 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
         connectButton.text = getString(R.string.connect)
         baudSpinner.isEnabled = true
         setStatus(getString(R.string.status_disconnected))
+        updateRomActions()
     }
 
     private fun sendInput() {
@@ -298,6 +348,26 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
 
     // SerialInputOutputManager.Listener — called on the I/O thread
     override fun onNewData(data: ByteArray) {
+        val receiver = transferReceiver
+        if (receiver != null) {
+            val result = receiver.consume(data)
+            if (result.events.any {
+                    it is SerialRomTransferReceiver.Event.Completed ||
+                        it is SerialRomTransferReceiver.Event.Failed
+                }) {
+                transferReceiver = null
+            }
+            runOnUiThread {
+                handleTransferEvents(result.events)
+                if (result.passthrough.isNotEmpty()) {
+                    val text = String(result.passthrough, Charsets.ISO_8859_1)
+                    appendTerminal(text)
+                    processIncoming(text)
+                }
+            }
+            return
+        }
+
         synchronized(captureLock) {
             val stream = captureStream
             if (stream != null) {
@@ -321,6 +391,23 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
     }
 
     private fun processIncoming(text: String) {
+        if (romReadPending) {
+            romReadBuffer.append(text)
+            if (romReadBuffer.length > 12000) {
+                romReadBuffer.delete(0, romReadBuffer.length - 8000)
+            }
+            val lower = romReadBuffer.toString().lowercase()
+            val markers = listOf(
+                "press button", "press any button", "finished successfully",
+                "finished reading", " -> ok"
+            )
+            if (markers.any { it in lower }) {
+                romReadPending = false
+                romReadReady = true
+                romStatusText.setText(R.string.rom_dump_finished)
+                updateRomActions()
+            }
+        }
         for (ch in text) {
             if (ch == '\n') {
                 handleLine(lineBuffer.toString().trimEnd('\r'))
@@ -354,7 +441,7 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
     private fun showMenuChips() {
         chipContainer.removeAllViews()
         for ((key, label) in menuOptions) {
-            addChip("$key  $label") { sendText(key) }
+            addChip("$key  $label") { performMenuAction(key, label) }
         }
         if (menuOptions.isNotEmpty()) {
             addChip(getString(R.string.chip_page_up)) { sendText("u") }
@@ -362,6 +449,173 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
         }
         chipScroll.visibility = if (chipContainer.childCount > 0) View.VISIBLE else View.GONE
         chipScroll.scrollTo(0, 0)
+    }
+
+    private fun performMenuAction(key: String, label: String) {
+        RomSystem.fromMenuLabel(label)?.let { selectedRomSystem = it }
+        val lower = label.lowercase()
+        if ("read rom" in lower || "dump rom" in lower) {
+            romReadPending = true
+            romReadReady = false
+            romReadBuffer.setLength(0)
+            romStatusText.setText(R.string.rom_reading)
+            romActionContainer.visibility = View.VISIBLE
+            updateRomActions()
+        }
+        sendText(key)
+    }
+
+    private fun updateRomActions() {
+        val downloading = transferReceiver != null
+        downloadButton.isEnabled = connected && romReadReady && !downloading
+        downloadPlayButton.isEnabled = connected && romReadReady && !downloading
+        openRomButton.isEnabled = !downloading
+        romProgress.visibility = if (downloading) View.VISIBLE else View.GONE
+        if (romReadReady || romReadPending || downloading) {
+            romActionContainer.visibility = View.VISIBLE
+        }
+    }
+
+    private fun startRomDownload(playWhenFinished: Boolean) {
+        if (!connected || !romReadReady) {
+            Toast.makeText(this, "Finish a ROM read while connected first.", Toast.LENGTH_LONG).show()
+            return
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
+            ContextCompat.checkSelfPermission(
+                this, Manifest.permission.WRITE_EXTERNAL_STORAGE
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            pendingPermissionLaunch = playWhenFinished
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE),
+                REQUEST_ROM_STORAGE_PERMISSION
+            )
+            return
+        }
+
+        launchAfterTransfer = playWhenFinished
+        transferReceiver = SerialRomTransferReceiver { name -> createRomDownloadTarget(name) }
+        romProgress.progress = 0
+        romStatusText.setText(R.string.rom_requesting)
+        updateRomActions()
+        if (!sendText("T")) {
+            transferReceiver?.cancel()
+            transferReceiver = null
+            updateRomActions()
+        }
+    }
+
+    private fun createRomDownloadTarget(deviceName: String): SerialRomTransferReceiver.Target {
+        val safeName = File(deviceName).name.ifBlank { "OSCR-ROM.bin" }.replace(':', '-')
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, safeName)
+                put(MediaStore.MediaColumns.MIME_TYPE, "application/octet-stream")
+                put(
+                    MediaStore.MediaColumns.RELATIVE_PATH,
+                    Environment.DIRECTORY_DOWNLOADS + "/CartReader/ROMs"
+                )
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
+            }
+            val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: throw IOException("could not create Downloads/CartReader/ROMs/$safeName")
+            val stream = contentResolver.openOutputStream(uri)
+                ?: throw IOException("could not open $safeName")
+            SerialRomTransferReceiver.Target(
+                BufferedOutputStream(stream),
+                uri.toString()
+            ) { success ->
+                if (success) {
+                    contentResolver.update(uri, ContentValues().apply {
+                        put(MediaStore.MediaColumns.IS_PENDING, 0)
+                    }, null, null)
+                } else {
+                    contentResolver.delete(uri, null, null)
+                }
+            }
+        } else {
+            val directory = File(
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                "CartReader/ROMs"
+            )
+            if (!directory.exists() && !directory.mkdirs()) {
+                throw IOException("could not create ${directory.absolutePath}")
+            }
+            val file = uniqueFile(directory, safeName)
+            val uri = FileProvider.getUriForFile(this, "$packageName.files", file)
+            SerialRomTransferReceiver.Target(
+                BufferedOutputStream(FileOutputStream(file)),
+                uri.toString()
+            ) { success -> if (!success) file.delete() }
+        }
+    }
+
+    private fun uniqueFile(directory: File, name: String): File {
+        var candidate = File(directory, name)
+        var suffix = 2
+        val extension = name.substringAfterLast('.', "")
+        val stem = if (extension.isEmpty()) name else name.dropLast(extension.length + 1)
+        while (candidate.exists()) {
+            val nextName = if (extension.isEmpty()) "$stem-$suffix" else "$stem-$suffix.$extension"
+            candidate = File(directory, nextName)
+            suffix++
+        }
+        return candidate
+    }
+
+    private fun handleTransferEvents(events: List<SerialRomTransferReceiver.Event>) {
+        for (event in events) {
+            when (event) {
+                is SerialRomTransferReceiver.Event.Started -> {
+                    romStatusText.text = getString(
+                        R.string.rom_downloading_fmt,
+                        event.name,
+                        formatBytes(event.size)
+                    )
+                    romProgress.visibility = View.VISIBLE
+                }
+                is SerialRomTransferReceiver.Event.Progress -> {
+                    val percent = if (event.size == 0L) 0 else ((event.received * 100) / event.size).toInt()
+                    romProgress.progress = percent
+                    romStatusText.text = getString(R.string.rom_downloading_percent_fmt, percent)
+                }
+                is SerialRomTransferReceiver.Event.Completed -> {
+                    romProgress.progress = 100
+                    romProgress.visibility = View.GONE
+                    romStatusText.text = getString(
+                        R.string.rom_downloaded_verified_fmt,
+                        event.name,
+                        event.crc32
+                    )
+                    appendTerminal("\n[ROM downloaded: ${event.name} — CRC32 %08X]\n".format(event.crc32))
+                    Toast.makeText(
+                        this,
+                        "Saved Downloads/CartReader/ROMs/${event.name}",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    if (launchAfterTransfer) {
+                        launchRom(Uri.parse(event.reference), event.name, selectedRomSystem)
+                    }
+                }
+                is SerialRomTransferReceiver.Event.Failed -> {
+                    romProgress.visibility = View.GONE
+                    romStatusText.setText(R.string.rom_transfer_failed)
+                    AlertDialog.Builder(this)
+                        .setTitle("ROM transfer")
+                        .setMessage(event.message)
+                        .setPositiveButton(android.R.string.ok, null)
+                        .show()
+                }
+            }
+        }
+        updateRomActions()
+    }
+
+    private fun formatBytes(bytes: Long): String {
+        val mib = bytes.toDouble() / (1024.0 * 1024.0)
+        return if (mib >= 1) String.format(Locale.US, "%.1f MiB", mib) else "$bytes bytes"
     }
 
     private fun showLetterChips() {
@@ -393,6 +647,117 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
         button.setPadding(padH, padV, padH, padV)
         button.setOnClickListener { onClick() }
         chipContainer.addView(button)
+    }
+
+    private fun showEmulatorSettings() {
+        val systems = RomSystem.entries.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Configure emulator for…")
+            .setItems(systems.map { it.displayName }.toTypedArray()) { _, index ->
+                showEmulatorChoices(systems[index])
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun showEmulatorChoices(system: RomSystem) {
+        val choices = mutableListOf<Pair<String, String>>()
+        choices += "RetroArch — ${system.retroArchCore.removeSuffix("_libretro_android.so")}" to "retroarch"
+        choices += "Always show Android app chooser" to "chooser"
+
+        val sampleUri = Uri.parse("content://$packageName.files/sample.${system.extensions.first()}")
+        val queryIntent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(sampleUri, "application/octet-stream")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        val installed = packageManager.queryIntentActivities(
+            queryIntent,
+            PackageManager.MATCH_DEFAULT_ONLY
+        ).distinctBy { it.activityInfo.packageName }
+            .sortedBy { it.loadLabel(packageManager).toString().lowercase() }
+        for (activity in installed) {
+            val packageId = activity.activityInfo.packageName
+            if (packageId != packageName && packageId !in listOf("com.retroarch", "com.retroarch.aarch64")) {
+                choices += "${activity.loadLabel(packageManager)} ($packageId)" to packageId
+            }
+        }
+
+        val preferences = getSharedPreferences("emulators", Context.MODE_PRIVATE)
+        val current = preferences.getString(system.name, "retroarch")
+        val checked = choices.indexOfFirst { it.second == current }.coerceAtLeast(0)
+        AlertDialog.Builder(this)
+            .setTitle(system.displayName)
+            .setSingleChoiceItems(choices.map { it.first }.toTypedArray(), checked) { dialog, which ->
+                preferences.edit().putString(system.name, choices[which].second).apply()
+                Toast.makeText(this, "${system.displayName}: ${choices[which].first}", Toast.LENGTH_SHORT).show()
+                dialog.dismiss()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun openExistingRom() {
+        openRomLauncher.launch(arrayOf("application/octet-stream", "application/zip"))
+    }
+
+    private fun displayNameFor(uri: Uri): String {
+        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) return cursor.getString(0)
+        }
+        return uri.lastPathSegment ?: "ROM"
+    }
+
+    private fun launchRom(uri: Uri, fileName: String, preferredSystem: RomSystem?) {
+        val system = RomSystem.resolve(fileName, preferredSystem)
+        if (system == null) {
+            AlertDialog.Builder(this)
+                .setTitle("Choose cartridge type first")
+                .setMessage("The .${fileName.substringAfterLast('.', "")} extension is ambiguous or unsupported. Select its console in the OSCR menu, then try again.")
+                .setPositiveButton(android.R.string.ok, null)
+                .show()
+            return
+        }
+
+        val preference = getSharedPreferences("emulators", Context.MODE_PRIVATE)
+            .getString(system.name, "retroarch") ?: "retroarch"
+        try {
+            val intent = if (preference == "retroarch") {
+                val retroArchPackage = listOf("com.retroarch.aarch64", "com.retroarch")
+                    .firstOrNull { isPackageInstalled(it) }
+                    ?: throw IllegalStateException("RetroArch is not installed. Install it or choose another emulator under Emulators.")
+                Intent().apply {
+                    setClassName(
+                        retroArchPackage,
+                        "com.retroarch.browser.retroactivity.RetroActivityFuture"
+                    )
+                    putExtra("ROM", uri.toString())
+                    putExtra("LIBRETRO", system.retroArchCore)
+                    clipData = android.content.ClipData.newRawUri("OSCR ROM", uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+            } else {
+                Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(uri, "application/octet-stream")
+                    clipData = android.content.ClipData.newRawUri("OSCR ROM", uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    if (preference != "chooser") setPackage(preference)
+                }
+            }
+            startActivity(if (preference == "chooser") Intent.createChooser(intent, "Open ${system.displayName} ROM with") else intent)
+        } catch (e: Exception) {
+            AlertDialog.Builder(this)
+                .setTitle("Could not launch emulator")
+                .setMessage(e.message ?: e.javaClass.simpleName)
+                .setPositiveButton(android.R.string.ok, null)
+                .show()
+        }
+    }
+
+    private fun isPackageInstalled(packageId: String): Boolean = try {
+        packageManager.getPackageInfo(packageId, 0)
+        true
+    } catch (_: PackageManager.NameNotFoundException) {
+        false
     }
 
     private fun showGuide() {
@@ -516,6 +881,11 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
             grantResults[0] == PackageManager.PERMISSION_GRANTED
         ) {
             startCapture()
+        } else if (requestCode == REQUEST_ROM_STORAGE_PERMISSION &&
+            grantResults.isNotEmpty() &&
+            grantResults[0] == PackageManager.PERMISSION_GRANTED
+        ) {
+            startRomDownload(pendingPermissionLaunch)
         }
     }
 

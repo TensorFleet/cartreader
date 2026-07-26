@@ -14,15 +14,23 @@ touch-friendly serial console, and save everything it sends into your Downloads 
 - Menus the reader prints (`0)Game Boy`, `1)NES/Famicom`, …) are parsed live and shown
   as tappable buttons, including page up/down and A–Z buttons for letter prompts.
 - Built-in **Guide** button with a step-by-step "how to dump a cartridge" walkthrough.
-- Selectable baud rate; defaults to 9600, which is what the firmware's
-  `SERIAL_MONITOR` mode uses.
+- Selectable baud rate; defaults to 500,000 for the matching serial-transfer
+  firmware.
 - **Capture**: records every byte the reader sends into
   `Downloads/CartReader/oscr_capture_<timestamp>.log` on the phone.
+- **Download** streams a completed ROM into `Downloads/CartReader/ROMs` and
+  verifies the firmware's CRC32 before publishing the file.
+- **Download & Play** verifies the same transfer and launches the emulator
+  configured for that cartridge type.
+- **Emulators** stores a per-system choice: RetroArch with the mapped core,
+  Android's app chooser, or a compatible installed application.
+- **Open existing ROM…** applies the same per-system emulator choice to a ROM
+  already stored on the Android device.
 - Opening the port toggles DTR, so the reader resets and prints its menu on connect.
 
 ## Using it with the reader
 
-1. Build the firmware with `SERIAL_MONITOR` enabled in `Cart_Reader/Config.h`
+1. Build the V15.6 serial-transfer firmware with `SERIAL_MONITOR` enabled in `Cart_Reader/Config.h`
    (comment out the `HW#` define, uncomment `SERIAL_MONITOR`). This replaces the
    OLED/LCD interface with a text menu on the USB serial port.
 2. Connect the reader to your Android device with a USB OTG adapter.
@@ -30,14 +38,15 @@ touch-friendly serial console, and save everything it sends into your Downloads 
    tap **Connect**, and the reader's menu appears in the console.
 4. Tap the menu buttons that appear above the text box to navigate (or type the
    number and tap **Send**).
-5. Tap **Capture** before starting an operation to record the reader's output to a
-   file in `Downloads/CartReader/`.
+5. After the checksum and **Press Button** prompt, tap **Download** or
+   **Download & Play**. Transfers are written incrementally and retained only
+   after the Android CRC32 matches the reader.
+6. Use **Emulators** to override the launch app separately for every supported
+   cartridge type.
 
-Note: with the stock firmware, cartridge dumps are written to the reader's **SD card**;
-the serial port carries the user interface, progress and log output, which the app can
-capture. The stock firmware has no file-transfer protocol for pulling dump files off
-the SD card over serial — take out the SD card (or use a USB card reader on the phone)
-to copy the ROM files themselves.
+The SD copy remains authoritative. The custom firmware reopens that completed file
+and sends it with the `OSCRXFER1` size-framed protocol; stock OSCR firmware does not
+support the Download buttons.
 
 ## Building
 
