@@ -817,8 +817,12 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
                         retroArchPackage,
                         "com.retroarch.browser.retroactivity.RetroActivityFuture"
                     )
-                    putExtra("ROM", uri.toString())
-                    putExtra("LIBRETRO", system.retroArchCore)
+                    // RetroArch releases before content-URI support require an
+                    // absolute ROM path. MediaStore exposes it for downloads
+                    // created by this app; newer releases can use the URI fallback.
+                    putExtra("ROM", retroArchRomReference(uri))
+                    putExtra("LIBRETRO", system.retroArchCorePath(retroArchPackage))
+                    putExtra("CONFIGFILE", RomSystem.retroArchConfigPath(retroArchPackage))
                     clipData = android.content.ClipData.newRawUri("OSCR ROM", uri)
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
@@ -845,6 +849,26 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
         true
     } catch (_: PackageManager.NameNotFoundException) {
         false
+    }
+
+    @Suppress("DEPRECATION")
+    private fun retroArchRomReference(uri: Uri): String {
+        if (uri.scheme == "file") return uri.path ?: uri.toString()
+        if (uri.scheme != "content") return uri.toString()
+
+        return try {
+            contentResolver.query(
+                uri,
+                arrayOf(MediaStore.MediaColumns.DATA),
+                null,
+                null,
+                null
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) cursor.getString(0) else null
+            } ?: uri.toString()
+        } catch (_: Exception) {
+            uri.toString()
+        }
     }
 
     private fun showGuide() {

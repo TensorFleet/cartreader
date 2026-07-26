@@ -33,7 +33,13 @@ enum class RomSystem(
     VECTREX("Vectrex", setOf("vec", "bin"), "vecx_libretro_android.so"),
     ATARI_8_BIT("Atari 8-bit", setOf("xex", "atr", "car", "bin"), "atari800_libretro_android.so");
 
+    fun retroArchCorePath(packageId: String): String =
+        "/data/user/0/$packageId/cores/$retroArchCore"
+
     companion object {
+        fun retroArchConfigPath(packageId: String): String =
+            "/storage/emulated/0/Android/data/$packageId/files/retroarch.cfg"
+
         fun fromMenuLabel(label: String): RomSystem? {
             val title = label.lowercase()
             return when {
