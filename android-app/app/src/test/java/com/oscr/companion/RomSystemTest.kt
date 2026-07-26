@@ -22,5 +22,7 @@ class RomSystemTest {
     fun mapsFirmwareMenuLabels() {
         assertEquals(RomSystem.SNES, RomSystem.fromMenuLabel("Super Nintendo/SFC"))
         assertEquals(RomSystem.GAME_BOY_ADVANCE, RomSystem.fromMenuLabel("Game Boy Advance"))
+        assertEquals(RomSystem.GAME_GEAR, RomSystem.fromMenuLabel("GameGear Retrode"))
+        assertEquals(RomSystem.GAME_GEAR, RomSystem.fromMenuLabel("GameGear Retron3in1"))
     }
 }

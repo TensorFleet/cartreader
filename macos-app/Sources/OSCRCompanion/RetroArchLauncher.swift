@@ -136,7 +136,7 @@ enum ROMSystem: String, CaseIterable, Equatable {
         if title.contains("nintendo 64") { return .nintendo64 }
         if title.contains("mega drive") || title.contains("genesis") { return .genesis }
         if title.contains("sms/gg") || title.contains("master system") || title.contains("mark iii") { return .masterSystem }
-        if title.contains("game gear") { return .gameGear }
+        if title.contains("game gear") || title.contains("gamegear") { return .gameGear }
         if title.contains("sg-1000") { return .sg1000 }
         if title.contains("pc engine") || title.contains("tg16") { return .pcEngine }
         if title.contains("wonderswan") { return .wonderSwan }

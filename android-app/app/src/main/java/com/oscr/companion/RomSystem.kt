@@ -44,7 +44,7 @@ enum class RomSystem(
                 "nintendo 64" in title -> NINTENDO_64
                 "mega drive" in title || "genesis" in title -> GENESIS
                 "sms/gg" in title || "master system" in title || "mark iii" in title -> MASTER_SYSTEM
-                "game gear" in title -> GAME_GEAR
+                "game gear" in title || "gamegear" in title -> GAME_GEAR
                 "sg-1000" in title -> SG1000
                 "pc engine" in title || "tg16" in title -> PC_ENGINE
                 "wonderswan" in title -> WONDERSWAN

@@ -16,6 +16,11 @@ final class RetroArchLauncherTests: XCTestCase {
         XCTAssertThrowsError(try ROMSystem.resolve(for: URL(fileURLWithPath: "/tmp/game.bin"), preferred: nil))
     }
 
+    func testRecognizesFirmwareGameGearAdapterLabels() {
+        XCTAssertEqual(ROMSystem.from(menuTitle: "GameGear Retrode"), .gameGear)
+        XCTAssertEqual(ROMSystem.from(menuTitle: "GameGear Retron3in1"), .gameGear)
+    }
+
     func testReadTrackerCapturesChunkedDumpPathAndCompletion() {
         var tracker = ROMReadTracker()
         tracker.select(QuickAction(id: "system", title: "2  Super Nintendo/SFC", value: "2", kind: .menu))
