@@ -571,10 +571,15 @@ boolean compareCRC(const char* database, uint32_t crc32sum, boolean renamerom, i
   }
 #if defined(SERIAL_MONITOR)
   if (
+    offset == 0 &&
     lastRomAvailable &&
     strcmp(lastRomFolder, folder) == 0 &&
     strcmp(lastRomFileName, fileName) == 0
   ) {
+    // Database CRCs with a nonzero offset intentionally exclude a container
+    // header (for example iNES and Lynx). Do not advertise those as the CRC of
+    // the complete SIZE-framed transfer; the END footer always contains the
+    // whole-file CRC calculated while sending the ROM.
     strlcpy(lastRomCRC, crcStr, sizeof(lastRomCRC));
   }
 #endif
