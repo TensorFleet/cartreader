@@ -3,6 +3,7 @@ package com.oscr.companion
 import android.Manifest
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
+import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
@@ -16,6 +17,7 @@ import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.util.Log
@@ -527,9 +529,9 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
         downloadPlayButton.isEnabled = connected && romReadReady && !downloading
         openRomButton.isEnabled = !downloading
         romProgress.visibility = if (downloading) View.VISIBLE else View.GONE
-        if (romReadReady || romReadPending || downloading) {
-            romActionContainer.visibility = View.VISIBLE
-        }
+        // Opening a ROM already stored on the device does not require a reader
+        // connection or a preceding cartridge dump.
+        romActionContainer.visibility = View.VISIBLE
     }
 
     private fun startRomDownload(playWhenFinished: Boolean) {
@@ -856,19 +858,40 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
         if (uri.scheme == "file") return uri.path ?: uri.toString()
         if (uri.scheme != "content") return uri.toString()
 
-        return try {
-            contentResolver.query(
-                uri,
-                arrayOf(MediaStore.MediaColumns.DATA),
-                null,
-                null,
-                null
-            )?.use { cursor ->
-                if (cursor.moveToFirst()) cursor.getString(0) else null
-            } ?: uri.toString()
-        } catch (_: Exception) {
-            uri.toString()
+        val candidates = mutableListOf(uri)
+        if (DocumentsContract.isDocumentUri(this, uri) &&
+            uri.authority == "com.android.providers.downloads.documents"
+        ) {
+            val documentId = DocumentsContract.getDocumentId(uri)
+            if (documentId.startsWith("raw:")) {
+                return documentId.removePrefix("raw:")
+            }
+            documentId.substringAfter(':', documentId).toLongOrNull()?.let { mediaId ->
+                candidates += ContentUris.withAppendedId(
+                    MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                    mediaId
+                )
+            }
         }
+
+        return candidates.firstNotNullOfOrNull { candidate ->
+            queryFilesystemPath(candidate)
+        } ?: uri.toString()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun queryFilesystemPath(uri: Uri): String? = try {
+        contentResolver.query(
+            uri,
+            arrayOf(MediaStore.MediaColumns.DATA),
+            null,
+            null,
+            null
+        )?.use { cursor ->
+            if (cursor.moveToFirst()) cursor.getString(0) else null
+        }
+    } catch (_: Exception) {
+        null
     }
 
     private fun showGuide() {
