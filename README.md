@@ -1,15 +1,22 @@
-<br>    
-<br>    
-<br>   
-<br>
-We have moved, please visit us at https://github.com/oscartreader 🚀
-<br>    
-<br>    
-<br>   
-<br>
-<br>    
-<br>    
-<br>   
+# OSCR Companion Fork
+
+> [!NOTE]
+> This repository is a fork of [sanni/cartreader](https://github.com/sanni/cartreader) that adds native graphical companion apps for **macOS** and **Android**. The original stand-alone OSCR firmware and hardware project remain at the heart of this fork; the GUI apps are optional tools for controlling a connected reader from a computer or Android device.
+
+The companion apps provide a serial console with parsed menu controls, verified ROM downloads, **Download & Play**, opening existing ROM files, and per-system emulator configuration.
+
+- [macOS companion app and setup](macos-app/README.md)
+- [Android companion app and setup](android-app/README.md)
+
+## Companion app screenshots
+
+| macOS | Android |
+| --- | --- |
+| ![OSCR Companion running on macOS](docs/screenshots/macos-oscr-companion.png) | ![OSCR Companion running on Android](docs/screenshots/android-oscr-companion.png) |
+
+## Upstream project
+
+The upstream OSCR project has moved to [github.com/oscartreader](https://github.com/oscartreader). 🚀
 
 ![image](https://dl.dropboxusercontent.com/s/ioc5oewzcuvs8nz/logos.png?dl=1)
 
