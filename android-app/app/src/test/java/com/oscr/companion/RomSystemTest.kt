@@ -25,4 +25,16 @@ class RomSystemTest {
         assertEquals(RomSystem.GAME_GEAR, RomSystem.fromMenuLabel("GameGear Retrode"))
         assertEquals(RomSystem.GAME_GEAR, RomSystem.fromMenuLabel("GameGear Retron3in1"))
     }
+
+    @Test
+    fun buildsRetroArchPathsForInstalledPackage() {
+        assertEquals(
+            "/data/user/0/com.retroarch.aarch64/cores/snes9x_libretro_android.so",
+            RomSystem.SNES.retroArchCorePath("com.retroarch.aarch64")
+        )
+        assertEquals(
+            "/storage/emulated/0/Android/data/com.retroarch.aarch64/files/retroarch.cfg",
+            RomSystem.retroArchConfigPath("com.retroarch.aarch64")
+        )
+    }
 }

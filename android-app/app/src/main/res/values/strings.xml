@@ -20,10 +20,11 @@
     <string name="rom_downloading_percent_fmt">Downloading ROM — %1$d%%</string>
     <string name="rom_downloaded_verified_fmt">Downloaded and verified %1$s — CRC32 %2$08X</string>
     <string name="rom_transfer_failed">ROM transfer failed</string>
+    <string name="rom_transfer_stalled_fmt">Transfer stalled after %1$s of %2$s. The partial download was removed; reconnect the reader and retry.</string>
     <string name="chip_page_up">▲ page (u)</string>
     <string name="chip_page_down">▼ page (d)</string>
     <string name="guide_title">How to dump a cartridge</string>
-    <string name="guide_text">1. Flash the matching OSCR serial-transfer firmware. It runs at 500,000 baud.\n\n2. Insert a cartridge, connect the reader with a USB OTG cable, and tap Connect.\n\n3. Pick the console and choose Read ROM. The OSCR writes and checksums its authoritative SD copy first.\n\n4. At the Press Button prompt, choose Download to save only, or Download &amp; Play to CRC-verify the USB copy and launch the emulator configured for that console.\n\n5. Verified ROMs are saved under Downloads/CartReader/ROMs. Open existing ROM… can launch a file that is already on this device.\n\n6. Use Emulators to select RetroArch, the Android chooser, or a specific installed app for each cartridge type.\n\nTip: ordinary menu commands are still sent as exact single bytes without a newline.</string>
+    <string name="guide_text">1. Flash the matching OSCR serial-transfer firmware. It runs at 115,200 baud for reliable sustained transfers.\n\n2. Insert a cartridge, connect the reader with a USB OTG cable, and tap Connect.\n\n3. Pick the console and choose Read ROM. The OSCR writes and checksums its authoritative SD copy first.\n\n4. At the Press Button prompt, choose Download to save only, or Download &amp; Play to CRC-verify the USB copy and launch the emulator configured for that console.\n\n5. Verified ROMs are saved under Downloads/CartReader/ROMs. Open existing ROM… can launch a file that is already on this device.\n\n6. Use Emulators to select RetroArch, the Android chooser, or a specific installed app for each cartridge type.\n\nTip: ordinary menu commands are still sent as exact single bytes without a newline.</string>
     <string name="status_disconnected">Disconnected — plug in the cart reader and tap Connect</string>
     <string name="status_no_device">No USB serial device found. Check the OTG cable.</string>
     <string name="status_requesting_permission">Requesting USB permission…</string>

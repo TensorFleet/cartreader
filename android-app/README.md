@@ -14,7 +14,7 @@ touch-friendly serial console, and save everything it sends into your Downloads 
 - Menus the reader prints (`0)Game Boy`, `1)NES/Famicom`, …) are parsed live and shown
   as tappable buttons, including page up/down and A–Z buttons for letter prompts.
 - Built-in **Guide** button with a step-by-step "how to dump a cartridge" walkthrough.
-- Selectable baud rate; defaults to 500,000 for the matching serial-transfer
+- Selectable baud rate; defaults to 115,200 for the matching serial-transfer
   firmware.
 - **Capture**: records every byte the reader sends into
   `Downloads/CartReader/oscr_capture_<timestamp>.log` on the phone.

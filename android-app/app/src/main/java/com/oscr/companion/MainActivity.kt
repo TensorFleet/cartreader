@@ -3,6 +3,7 @@ package com.oscr.companion
 import android.Manifest
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
+import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
@@ -14,8 +15,12 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
+import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.provider.OpenableColumns
+import android.util.Log
 import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.widget.ArrayAdapter
@@ -55,6 +60,15 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
         private const val REQUEST_ROM_STORAGE_PERMISSION = 2
         private const val WRITE_WAIT_MILLIS = 2000
         private const val MAX_TERMINAL_CHARS = 100000
+        private const val SERIAL_READ_BUFFER_BYTES = 1024
+        private const val SERIAL_FOOTER_READ_BUFFER_BYTES = 32
+        // A zero timeout uses Android's queued UsbRequest path. Timed
+        // bulkTransfer reads lose bytes on some AYN/CH340 host combinations;
+        // the firmware's trailing padding ensures the final 1 KiB request fills.
+        private const val SERIAL_READ_TIMEOUT_MILLIS = 0
+        private const val TRANSFER_START_TIMEOUT_MILLIS = 120_000L
+        private const val TRANSFER_STALL_TIMEOUT_MILLIS = 10_000L
+        private const val LOG_TAG = "OSCRTransfer"
     }
 
     private lateinit var usbManager: UsbManager
@@ -62,6 +76,9 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
     private var port: UsbSerialPort? = null
     private var ioManager: SerialInputOutputManager? = null
     private var connected = false
+    private val serialDataExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "OSCRSerialData")
+    }
 
     private val captureLock = Any()
     private var captureStream: OutputStream? = null
@@ -89,7 +106,7 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
     private lateinit var downloadPlayButton: Button
     private lateinit var openRomButton: Button
 
-    private val baudRates = listOf(9600, 19200, 38400, 57600, 115200, 230400, 500000)
+    private val baudRates = listOf(9600, 19200, 38400, 57600, 115200, 230400, 250000, 500000)
 
     // Firmware menus print one option per line as "N)Label" (N is 0-6), followed by
     // a "type a number(0-6)" prompt; the selection is read back as a single byte.
@@ -104,6 +121,11 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
     @Volatile private var transferReceiver: SerialRomTransferReceiver? = null
     private var launchAfterTransfer = false
     private var pendingPermissionLaunch = false
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val transferTimeout = Runnable { handleTransferTimeout() }
+    private var transferReceived = 0L
+    private var transferExpected = 0L
+    private var lastLoggedTransferPercent = -1
 
     private val openRomLauncher = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
@@ -172,7 +194,7 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
         )
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         baudSpinner.adapter = adapter
-        baudSpinner.setSelection(baudRates.lastIndex) // serial-transfer firmware: 500,000
+        baudSpinner.setSelection(baudRates.indexOf(115200)) // serial-transfer firmware default
 
         connectButton.setOnClickListener { if (connected) disconnect() else connect() }
         sendButton.setOnClickListener { sendInput() }
@@ -221,6 +243,7 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
         transferReceiver = null
         stopCapture(silent = true)
         disconnect()
+        serialDataExecutor.shutdownNow()
         unregisterReceiver(usbReceiver)
         super.onDestroy()
     }
@@ -285,8 +308,18 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
 
         port = serialPort
         val manager = SerialInputOutputManager(serialPort, this)
+        manager.readBufferSize = SERIAL_READ_BUFFER_BYTES
+        // The queued UsbRequest path avoids byte loss observed with synchronous
+        // bulkTransfer on the AYN Thor's CH340 host controller. The 1 KiB buffer
+        // keeps callback load bounded, and firmware padding releases its tail.
+        manager.readTimeout = SERIAL_READ_TIMEOUT_MILLIS
         ioManager = manager
-        Executors.newSingleThreadExecutor().submit(manager)
+        manager.start()
+        Log.i(
+            LOG_TAG,
+            "Serial reader started: baud=${selectedBaud()} buffer=${manager.readBufferSize} " +
+                "timeoutMs=${manager.readTimeout}"
+        )
 
         connected = true
         connectButton.text = getString(R.string.disconnect)
@@ -303,6 +336,7 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
     }
 
     private fun disconnect() {
+        disarmTransferTimeout()
         transferReceiver?.cancel()
         transferReceiver = null
         connected = false
@@ -346,49 +380,73 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
         }
     }
 
-    // SerialInputOutputManager.Listener — called on the I/O thread
+    // Return immediately so SerialInputOutputManager can queue the next USB
+    // read before storage writes, CRC work, or UI delivery can stall it.
     override fun onNewData(data: ByteArray) {
+        serialDataExecutor.execute { processSerialData(data) }
+    }
+
+    private fun processSerialData(data: ByteArray) {
+        captureSerialData(data)
+
         val receiver = transferReceiver
         if (receiver != null) {
             val result = receiver.consume(data)
-            if (result.events.any {
+            if (result.events.isNotEmpty()) armTransferTimeout()
+            val finished = result.events.any {
                     it is SerialRomTransferReceiver.Event.Completed ||
                         it is SerialRomTransferReceiver.Event.Failed
-                }) {
+                }
+            if (finished) {
                 transferReceiver = null
+                ioManager?.readBufferSize = SERIAL_READ_BUFFER_BYTES
+            } else if (
+                receiver.bytesExpected > 0 &&
+                receiver.bytesReceived == receiver.bytesExpected
+            ) {
+                // The CH340 host withholds a short final bulk request. Once the
+                // exact payload is complete, use one endpoint-sized read so the
+                // checksum footer is delivered immediately, then restore 1 KiB.
+                ioManager?.readBufferSize = SERIAL_FOOTER_READ_BUFFER_BYTES
             }
-            runOnUiThread {
-                handleTransferEvents(result.events)
-                if (result.passthrough.isNotEmpty()) {
-                    val text = String(result.passthrough, Charsets.ISO_8859_1)
-                    appendTerminal(text)
-                    processIncoming(text)
+            if (result.events.isNotEmpty() || result.passthrough.isNotEmpty()) {
+                runOnUiThread {
+                    handleTransferEvents(result.events)
+                    if (result.passthrough.isNotEmpty()) {
+                        val text = serialTerminalText(result.passthrough)
+                        appendTerminal(text)
+                        processIncoming(text)
+                    }
                 }
             }
             return
         }
 
-        synchronized(captureLock) {
-            val stream = captureStream
-            if (stream != null) {
-                try {
-                    stream.write(data)
-                    captureBytes += data.size
-                } catch (e: IOException) {
-                    runOnUiThread {
-                        appendTerminal("\n[capture write failed: ${e.message}]\n")
-                        stopCapture(silent = true)
-                    }
-                }
-            }
-        }
         runOnUiThread {
-            val text = String(data, Charsets.ISO_8859_1)
+            val text = serialTerminalText(data)
             appendTerminal(text)
             processIncoming(text)
             updateCaptureUi()
         }
     }
+
+    private fun captureSerialData(data: ByteArray) {
+        synchronized(captureLock) {
+            val stream = captureStream ?: return
+            try {
+                stream.write(data)
+                captureBytes += data.size
+            } catch (e: IOException) {
+                runOnUiThread {
+                    appendTerminal("\n[capture write failed: ${e.message}]\n")
+                    stopCapture(silent = true)
+                }
+            }
+        }
+    }
+
+    private fun serialTerminalText(data: ByteArray): String =
+        String(data.filter { it != 0.toByte() }.toByteArray(), Charsets.ISO_8859_1)
 
     private fun processIncoming(text: String) {
         if (romReadPending) {
@@ -399,7 +457,7 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
             val lower = romReadBuffer.toString().lowercase()
             val markers = listOf(
                 "press button", "press any button", "finished successfully",
-                "finished reading", " -> ok"
+                "finished reading"
             )
             if (markers.any { it in lower }) {
                 romReadPending = false
@@ -471,9 +529,9 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
         downloadPlayButton.isEnabled = connected && romReadReady && !downloading
         openRomButton.isEnabled = !downloading
         romProgress.visibility = if (downloading) View.VISIBLE else View.GONE
-        if (romReadReady || romReadPending || downloading) {
-            romActionContainer.visibility = View.VISIBLE
-        }
+        // Opening a ROM already stored on the device does not require a reader
+        // connection or a preceding cartridge dump.
+        romActionContainer.visibility = View.VISIBLE
     }
 
     private fun startRomDownload(playWhenFinished: Boolean) {
@@ -497,10 +555,17 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
 
         launchAfterTransfer = playWhenFinished
         transferReceiver = SerialRomTransferReceiver { name -> createRomDownloadTarget(name) }
+        transferReceived = 0
+        transferExpected = 0
+        lastLoggedTransferPercent = -1
+        ioManager?.readBufferSize = SERIAL_READ_BUFFER_BYTES
         romProgress.progress = 0
         romStatusText.setText(R.string.rom_requesting)
         updateRomActions()
+        armTransferTimeout(TRANSFER_START_TIMEOUT_MILLIS)
+        Log.i(LOG_TAG, "ROM transfer requested; playWhenFinished=$playWhenFinished")
         if (!sendText("T")) {
+            disarmTransferTimeout()
             transferReceiver?.cancel()
             transferReceiver = null
             updateRomActions()
@@ -569,6 +634,9 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
         for (event in events) {
             when (event) {
                 is SerialRomTransferReceiver.Event.Started -> {
+                    transferReceived = 0
+                    transferExpected = event.size
+                    Log.i(LOG_TAG, "Transfer started: name=${event.name} expected=${event.size}")
                     romStatusText.text = getString(
                         R.string.rom_downloading_fmt,
                         event.name,
@@ -577,11 +645,27 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
                     romProgress.visibility = View.VISIBLE
                 }
                 is SerialRomTransferReceiver.Event.Progress -> {
+                    transferReceived = event.received
+                    transferExpected = event.size
                     val percent = if (event.size == 0L) 0 else ((event.received * 100) / event.size).toInt()
+                    if (percent != lastLoggedTransferPercent) {
+                        lastLoggedTransferPercent = percent
+                        Log.d(
+                            LOG_TAG,
+                            "Transfer progress: received=${event.received} expected=${event.size} percent=$percent"
+                        )
+                    }
                     romProgress.progress = percent
                     romStatusText.text = getString(R.string.rom_downloading_percent_fmt, percent)
                 }
                 is SerialRomTransferReceiver.Event.Completed -> {
+                    disarmTransferTimeout()
+                    transferReceived = transferExpected
+                    Log.i(
+                        LOG_TAG,
+                        "Transfer completed: name=${event.name} bytes=$transferReceived crc32=%08X"
+                            .format(event.crc32)
+                    )
                     romProgress.progress = 100
                     romProgress.visibility = View.GONE
                     romStatusText.text = getString(
@@ -600,6 +684,11 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
                     }
                 }
                 is SerialRomTransferReceiver.Event.Failed -> {
+                    disarmTransferTimeout()
+                    Log.e(
+                        LOG_TAG,
+                        "Transfer failed at $transferReceived/$transferExpected bytes: ${event.message}"
+                    )
                     romProgress.visibility = View.GONE
                     romStatusText.setText(R.string.rom_transfer_failed)
                     AlertDialog.Builder(this)
@@ -730,8 +819,12 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
                         retroArchPackage,
                         "com.retroarch.browser.retroactivity.RetroActivityFuture"
                     )
-                    putExtra("ROM", uri.toString())
-                    putExtra("LIBRETRO", system.retroArchCore)
+                    // RetroArch releases before content-URI support require an
+                    // absolute ROM path. MediaStore exposes it for downloads
+                    // created by this app; newer releases can use the URI fallback.
+                    putExtra("ROM", retroArchRomReference(uri))
+                    putExtra("LIBRETRO", system.retroArchCorePath(retroArchPackage))
+                    putExtra("CONFIGFILE", RomSystem.retroArchConfigPath(retroArchPackage))
                     clipData = android.content.ClipData.newRawUri("OSCR ROM", uri)
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
@@ -760,6 +853,47 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
         false
     }
 
+    @Suppress("DEPRECATION")
+    private fun retroArchRomReference(uri: Uri): String {
+        if (uri.scheme == "file") return uri.path ?: uri.toString()
+        if (uri.scheme != "content") return uri.toString()
+
+        val candidates = mutableListOf(uri)
+        if (DocumentsContract.isDocumentUri(this, uri) &&
+            uri.authority == "com.android.providers.downloads.documents"
+        ) {
+            val documentId = DocumentsContract.getDocumentId(uri)
+            if (documentId.startsWith("raw:")) {
+                return documentId.removePrefix("raw:")
+            }
+            documentId.substringAfter(':', documentId).toLongOrNull()?.let { mediaId ->
+                candidates += ContentUris.withAppendedId(
+                    MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                    mediaId
+                )
+            }
+        }
+
+        return candidates.firstNotNullOfOrNull { candidate ->
+            queryFilesystemPath(candidate)
+        } ?: uri.toString()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun queryFilesystemPath(uri: Uri): String? = try {
+        contentResolver.query(
+            uri,
+            arrayOf(MediaStore.MediaColumns.DATA),
+            null,
+            null,
+            null
+        )?.use { cursor ->
+            if (cursor.moveToFirst()) cursor.getString(0) else null
+        }
+    } catch (_: Exception) {
+        null
+    }
+
     private fun showGuide() {
         AlertDialog.Builder(this)
             .setTitle(R.string.guide_title)
@@ -769,12 +903,48 @@ class MainActivity : AppCompatActivity(), SerialInputOutputManager.Listener {
     }
 
     override fun onRunError(e: Exception) {
+        Log.e(LOG_TAG, "Serial reader stopped with an error", e)
         runOnUiThread {
             if (connected) {
                 appendTerminal("\n[connection lost: ${e.message}]\n")
                 disconnect()
             }
         }
+    }
+
+    private fun armTransferTimeout(delayMillis: Long = TRANSFER_STALL_TIMEOUT_MILLIS) {
+        mainHandler.removeCallbacks(transferTimeout)
+        mainHandler.postDelayed(transferTimeout, delayMillis)
+    }
+
+    private fun disarmTransferTimeout() {
+        mainHandler.removeCallbacks(transferTimeout)
+    }
+
+    private fun handleTransferTimeout() {
+        val receiver = transferReceiver ?: return
+        transferReceived = receiver.bytesReceived
+        transferExpected = receiver.bytesExpected
+        val message = getString(
+            R.string.rom_transfer_stalled_fmt,
+            formatBytes(transferReceived),
+            formatBytes(transferExpected)
+        )
+        Log.e(
+            LOG_TAG,
+            "Transfer stalled: received=$transferReceived expected=$transferExpected timeoutMs=$TRANSFER_STALL_TIMEOUT_MILLIS"
+        )
+        receiver.cancel()
+        transferReceiver = null
+        ioManager?.readBufferSize = SERIAL_READ_BUFFER_BYTES
+        romProgress.visibility = View.GONE
+        romStatusText.setText(R.string.rom_transfer_failed)
+        AlertDialog.Builder(this)
+            .setTitle("ROM transfer")
+            .setMessage(message)
+            .setPositiveButton(android.R.string.ok, null)
+            .show()
+        updateRomActions()
     }
 
     private fun toggleCapture() {

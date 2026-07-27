@@ -32,6 +32,7 @@ final class SerialROMTransferReceiver {
     private var finalURL: URL?
     private var expectedSize: UInt64 = 0
     private var receivedSize: UInt64 = 0
+    private var expectedCRC: UInt32?
     private var crc = CRC32()
 
     init(destinationDirectory: URL, fileManager: FileManager = .default) {
@@ -77,6 +78,12 @@ final class SerialROMTransferReceiver {
                     fail("The reader sent an invalid transfer header.", into: &result)
                     continue
                 }
+                let crcText = value(named: "CRC32", in: header)
+                let headerCRC = crcText.flatMap { UInt32($0, radix: 16) }
+                guard crcText == nil || headerCRC != nil else {
+                    fail("The reader sent an invalid transfer header.", into: &result)
+                    continue
+                }
 
                 do {
                     try prepareFile(named: name)
@@ -85,6 +92,7 @@ final class SerialROMTransferReceiver {
                     continue
                 }
                 expectedSize = size
+                expectedCRC = headerCRC
                 buffer.removeSubrange(buffer.startIndex..<dataRange.upperBound)
                 state = .data
                 result.events.append(.started(name: finalURL?.lastPathComponent ?? name, size: size))
@@ -93,6 +101,22 @@ final class SerialROMTransferReceiver {
             case .data:
                 let remaining = expectedSize - receivedSize
                 guard remaining > 0 else {
+                    if let expectedCRC {
+                        let localCRC = crc.finalized
+                        guard expectedCRC == localCRC else {
+                            fail(
+                                String(
+                                    format: "ROM transfer checksum mismatch (reader %08X, Mac %08X). Please retry.",
+                                    expectedCRC,
+                                    localCRC
+                                ),
+                                into: &result
+                            )
+                            continue
+                        }
+                        completeTransfer(crc32: localCRC, into: &result)
+                        continue
+                    }
                     closeHandle()
                     state = .footer
                     madeProgress = true
@@ -138,21 +162,8 @@ final class SerialROMTransferReceiver {
                     )
                     continue
                 }
-                guard let temporaryURL, let finalURL else {
-                    fail("The ROM download destination was lost.", into: &result)
-                    continue
-                }
-                do {
-                    try fileManager.moveItem(at: temporaryURL, to: finalURL)
-                } catch {
-                    fail("Could not finalize the ROM download: \(error.localizedDescription)", into: &result)
-                    continue
-                }
                 buffer.removeSubrange(buffer.startIndex..<lineRange.upperBound)
-                result.events.append(.completed(url: finalURL, crc32: localCRC))
-                state = .finished
-                result.passthrough = buffer
-                buffer.removeAll()
+                completeTransfer(crc32: localCRC, into: &result)
 
             case .finished:
                 result.passthrough.append(buffer)
@@ -229,6 +240,24 @@ final class SerialROMTransferReceiver {
         try? handle?.synchronize()
         try? handle?.close()
         handle = nil
+    }
+
+    private func completeTransfer(crc32: UInt32, into result: inout ROMTransferConsumeResult) {
+        closeHandle()
+        guard let temporaryURL, let finalURL else {
+            fail("The ROM download destination was lost.", into: &result)
+            return
+        }
+        do {
+            try fileManager.moveItem(at: temporaryURL, to: finalURL)
+        } catch {
+            fail("Could not finalize the ROM download: \(error.localizedDescription)", into: &result)
+            return
+        }
+        result.events.append(.completed(url: finalURL, crc32: crc32))
+        state = .finished
+        result.passthrough = buffer
+        buffer.removeAll()
     }
 
     private func finish(removingPartialFile: Bool) {

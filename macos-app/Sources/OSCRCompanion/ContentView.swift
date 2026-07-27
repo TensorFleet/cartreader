@@ -213,7 +213,7 @@ struct SettingsView: View {
                         Text("\(rate)").tag(rate)
                     }
                 }
-                Text("OSCR serial-transfer firmware uses 500,000 baud.")
+                Text("OSCR serial-transfer firmware uses 115,200 baud.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

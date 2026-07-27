@@ -323,6 +323,7 @@ char folder[38];
 // the ROM path held in the shared folder/fileName variables.
 char lastRomFolder[sizeof(folder)];
 char lastRomFileName[FILENAME_LENGTH];
+char lastRomCRC[9] = "";
 boolean lastRomAvailable = false;
 #endif
 
@@ -568,6 +569,20 @@ boolean compareCRC(const char* database, uint32_t crc32sum, boolean renamerom, i
     // Convert precalculated crc to string
     sprintf(crcStr, "%08lX", ~crc32sum);
   }
+#if defined(SERIAL_MONITOR)
+  if (
+    offset == 0 &&
+    lastRomAvailable &&
+    strcmp(lastRomFolder, folder) == 0 &&
+    strcmp(lastRomFileName, fileName) == 0
+  ) {
+    // Database CRCs with a nonzero offset intentionally exclude a container
+    // header (for example iNES and Lynx). Do not advertise those as the CRC of
+    // the complete SIZE-framed transfer; the END footer always contains the
+    // whole-file CRC calculated while sending the ROM.
+    strlcpy(lastRomCRC, crcStr, sizeof(lastRomCRC));
+  }
+#endif
   // Print checksum
   print_Msg(crcStr);
   display_Update();
@@ -699,6 +714,7 @@ void createFolder(const char* system, const char* subfolder, const char* gameNam
   if (subfolder != NULL && strcmp(subfolder, "ROM") == 0) {
     strlcpy(lastRomFolder, folder, sizeof(lastRomFolder));
     strlcpy(lastRomFileName, fileName, sizeof(lastRomFileName));
+    lastRomCRC[0] = '\0';
     lastRomAvailable = true;
   }
 #endif
@@ -2265,7 +2281,9 @@ void setup() {
 
 #ifdef ENABLE_SERIAL
   // Serial Begin
-  Serial.begin(500000);
+  // Use the widely supported 115.2 kbaud rate for reliable sustained binary
+  // transfers across Android USB hosts and CH340 adapters.
+  Serial.begin(115200);
   // LED Error
   rgbLed(blue_color);
 #endif /* ENABLE_SERIAL */
@@ -3170,6 +3188,10 @@ void transferLastRomSerial() {
   Serial.println(lastRomFileName);
   Serial.print(F("SIZE:"));
   Serial.println(transferSize);
+  if (lastRomCRC[0] != '\0') {
+    Serial.print(F("CRC32:"));
+    Serial.println(lastRomCRC);
+  }
   Serial.println(F("DATA"));
   Serial.flush();
 
@@ -3187,6 +3209,12 @@ void transferLastRomSerial() {
   Serial.println();
   Serial.print(F("OSCRXFER1 END "));
   Serial.println(transferCRCString);
+  // CH340 Android hosts can discard a final short bulk-transfer request.
+  // Padding is outside SIZE and ensures the payload tail plus CRC footer fill
+  // the host's 4 KiB request before its timeout expires.
+  for (uint16_t padding = 0; padding < 4096; padding++) {
+    Serial.write((uint8_t)0);
+  }
   Serial.flush();
 }
 #endif
